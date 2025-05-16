@@ -1,26 +1,48 @@
-# 商品生成器
+# 商品池生成器
 
-## 核心逻辑
+## 数据结构设计
 
-该商品生成器用于模拟生成天猫商品清单，支持后续的搜索结果模拟。它根据提供的输入参数生成指定数量的商品，并以JSON格式返回商品列表。
+### 商品字段说明
 
-## 输入值
+每个商品对象包含以下字段：
 
-- `category_name`: 商品类别名称
-- `count`: 商品数量，默认为500个
+| 字段名       | 类型            | 描述                                       |
+|-------------|---------------|------------------------------------------|
+| product_id  | INT           | 商品唯一标识符                                  |
+| category_id | INT           | 商品所属分类（叶子分类）                             |
+| name         | VARCHAR(50)   | 具体商品名称                                   |
+| weight      | float         | 商品在三级分类中的权重，用于筛选，同一个三级分类里的商品weight加起来等于1 |
+| price       | DECIMAL(12,2) | 商品当前价格（单位：元）                             |
+| change_count| INT           | 商品价格变动次数                                 |
 
-## 输出值
+---
 
-返回一个商品列表，每个商品包含以下字段：
-- `product_name`: 商品名称
-- `price`: 商品价格
+## 功能说明
 
-## 生成逻辑
+### 主要功能
+- 根据指定数量生成带有符合天猫规则的商品ID、该商品对应的分类(category_id)、商品名称(根据category_id,找出category_name,然后根据分类名称生成商品名称，比如分类名称叫苹果，商品名称就叫苹果_1，苹果_2)、商品初始价格(随机生成，同一种商品不要差别30%以上)、商品权重(商品在三级分类中的权重，用于筛选后续在price表中的筛选)、商品价格变动次数的商品池。
+- 将生成的商品池写入 CSV 文件供后续处理使用。
 
-### 商品名称生成
+---
 
-商品名称基于`category`生成，格式为`[category] Product [index]`，其中`index`为商品的序号（从1开始）。
-   
-### 商品价格生成
+## 函数设计
+1. load_leaf_categories(file_path: str) → List[Category]
+2. generate_unique_product_id(existing_ids: Set[int]) → int
+3. generate_product_name(category_name: str, index: int) → str
+4. generate_initial_price(base_price: float, fluctuation: float = 0.3) → float
+5. generate_weight() → float
+6. generate_change_count(max_changes: int = 5) → int
+7. build_product(
+       existing_ids: Set[int],
+       category: Category,
+       name_index: Dict[int, int]
+   ) → Product
+8. generate_product_pool(
+       categories: List[Category],
+       count: int
+   ) → List[Product]
+9. write_products_to_csv(
+       products: List[Product],
+       file_path: str
+   ) → None
 
-商品价格随机生成，范围在50到500之间，保留两位小数。

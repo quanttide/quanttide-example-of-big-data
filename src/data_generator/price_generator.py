@@ -1,132 +1,152 @@
 import random
-from datetime import datetime, timedelta
 import csv
+from datetime import datetime, timedelta
+from pathlib import Path
+from typing import NamedTuple, List
+from collections import defaultdict
 
-class Product:
-    def __init__(self, id, weight, price):
-        self.id = id
-        self.weight = weight
-        self.price = price
-        self.last_price_date = datetime.now()  # 记录最近一次调价时间
-
-    def __repr__(self):
-        return f"Product(id={self.id}, price={self.price:.2f}, weight={self.weight})"
-
+# 假设之前定义好的 Product 类型
+class Product(NamedTuple):
+    product_id: int
+    category_id: int
+    name: str
+    weight: float
+    price: float
 
 class PriceGenerator:
-    def __init__(self, product_pool, daily_change_ratio=0.015, price_change_interval=(45, 75), promotion_dates=None):
-        """
-        初始化价格生成器
+    def __init__(self, products: List[Product]):
+        # 初始化数据
+        self.product_pool = products
+        self.current_products = []
+        self.promotion_dates = []
+        # 整个生命周期只生成一次的价格变动计划
+        self.price_change_plan = {}
 
-        :param product_pool: 商品池（包含Product对象的列表）
-        :param daily_change_ratio: 每天变化商品的比例（默认1.5%）
-        :param price_change_interval: 价格平均变化间隔（天数，默认45~75天）
-        :param promotion_dates: 大促日期列表（datetime.date 或 datetime.datetime）
-        """
-        self.product_pool = product_pool
-        self.daily_change_ratio = daily_change_ratio
-        self.price_change_interval = price_change_interval
-        self.promotion_dates = promotion_dates or []
+    def weighted_random_choice(self, k_per_category: int = 120) -> List[Product]:
+        category_map = defaultdict(list)
+        for p in self.product_pool:
+            category_map[p.category_id].append(p)
 
-    def weighted_random_choice(self, products, k):
-        """
-        根据权重从商品池中随机选择k个商品
+        selected = []
+        for cat, items in category_map.items():
+            weights = [p.weight for p in items]
+            num_to_pick = min(len(items), k_per_category)
+            picked = random.choices(items, weights=weights, k=num_to_pick)
+            selected.extend(picked)
 
-        :param products: 商品池（列表）
-        :param k: 需要抽取的商品数量
-        :return: 抽取后的商品列表
-        """
-        weights = [p.weight for p in products]
-        return random.choices(products, weights=weights, k=k)
+        return selected
 
-    def produce_init(self):
-        """
-        初始生成某一天的商品池子集（120个）
+    def produce_init(self) -> None:
+        # 首次选品
+        self.current_products = self.weighted_random_choice()
 
-        :return: 当天的商品列表
-        """
-        return self.weighted_random_choice(self.product_pool, k=120)
+    def adjust_products(self) -> None:
+        category_map = defaultdict(list)
+        for p in self.current_products:
+            category_map[p.category_id].append(p)
 
-    def adjust_products(self, daily_products):
-        """
-        每天调整商品池，变化率为1%-2%
+        new_products = []
+        for cat_id, current_list in category_map.items():
+            total = len(current_list)
+            change_ratio = random.uniform(0.01, 0.02)
+            change_num = max(1, int(total * change_ratio))
 
-        :param daily_products: 当前商品列表
-        :return: 调整后的商品列表
-        """
-        num_changes = max(1, int(len(daily_products) * self.daily_change_ratio))
-        for _ in range(num_changes):
-            idx = random.randint(0, len(daily_products) - 1)
-            daily_products[idx] = self.weighted_random_choice(self.product_pool, 1)[0]
-        return daily_products
+            # 保留当前未被替换的商品
+            remove_indices = set(random.sample(range(total), change_num))
+            kept = [p for i, p in enumerate(current_list) if i not in remove_indices]
 
-    def adjust_prices(self, products, current_date):
-        """
-        调整商品价格，平均1.5到2.5个月变动一次。大促时额外增加变化。
+            # 可选的新商品池：同类但不在当前池中的商品
+            pool_candidates = [
+                p for p in self.product_pool
+                if p.category_id == cat_id and p not in current_list
+            ]
 
-        :param products: 当前商品列表
-        :param current_date: 当前日期
-        :return: 更新价格后的商品列表
-        """
-        avg_days = random.randint(*self.price_change_interval)
+            if pool_candidates:
+                weights = [p.weight for p in pool_candidates]
+                added = random.choices(pool_candidates, weights=weights, k=change_num)
+            else:
+                added = []
 
-        for product in products:
-            days_since_last_price = (current_date - product.last_price_date).days
+            new_products.extend(kept + added)
 
-            if days_since_last_price >= avg_days or current_date.date() in self.promotion_dates:
-                change_ratio = random.uniform(-0.1, 0.1)  # ±10%浮动
-                product.price *= (1 + change_ratio)
-                product.last_price_date = current_date
+        self.current_products = new_products
 
-        return products
+    def init_price_plan(self, start_date: datetime, total_days: int = 365) -> None:
+        """生成全年（或指定天数）每个产品的随机涨价日列表，只调用一次"""
+        for p in self.current_products:
+            # 高斯分布决定价格变动次数
+            change_count = max(1, int(random.gauss(6, 2)))
+            change_count = min(change_count, total_days)
+            # 从第 1 天到 total_days-1 天中采样
+            change_dates = sorted(random.sample(range(1, total_days), change_count))
+            self.price_change_plan[p.product_id] = change_dates
 
-    def export_to_csv(self, daily_data, filename='daily_prices.csv'):
-        """
-        将每日商品数据导出为 CSV 文件（使用内置 csv 模块）
+    def adjust_prices(self, current_date: datetime, start_date: datetime) -> None:
+        updated = []
+        total_days = (current_date.date() - start_date.date()).days
 
-        :param daily_data: price_generator 返回的数据
-        :param filename: 输出文件名
-        """
-        with open(filename, mode='w', newline='', encoding='utf-8') as f:
-            writer = csv.writer(f)
-            writer.writerow(['Date', 'Product ID', 'Price', 'Weight'])
+        # 跳过第 0 天
+        if total_days <= 0:
+            return
 
-            for day in daily_data:
-                date = day['date']
-                for product in day['products']:
-                    writer.writerow([date, product.id, round(product.price, 2), product.weight])
+        for p in self.current_products:
+            plan = self.price_change_plan.get(p.product_id, [])
+            if plan and plan[0] == total_days:
+                # 到了预定变价日，弹出并生成新价格
+                plan.pop(0)
+                base_price = p.price
+                new_price = round(base_price * random.uniform(0.9, 1.1), 2)
+                updated.append(p._replace(price=new_price))
+            else:
+                updated.append(p)
 
-def price_generator(product_pool, start_date=None, days=30, promotion_dates=None):
-    """
-    价格生成器主函数，模拟每日生成过程
+        self.current_products = updated
 
-    :param product_pool: 商品池（包含Product对象的列表）
-    :param start_date: 开始日期（datetime.date 或 datetime.datetime）
-    :param days: 模拟天数
-    :param promotion_dates: 大促日期列表
-    :return: 包含每日商品数据的字典列表
-    """
-    generator = PriceGenerator(product_pool, promotion_dates=promotion_dates)
+def price_generator(products: List[Product], days: int = 365):
+    gen = PriceGenerator(products)
+    gen.produce_init()
 
-    start_date = start_date or datetime.now()
-    current_date = start_date
-    daily_data = []
+    today = datetime.now()
+    # 生成一次全年的价格变动计划
+    gen.init_price_plan(today, total_days=days)
 
-    daily_products = generator.produce_init()
+    out_dir = Path(__file__).parent.parent.parent / 'data' / 'daily_price'
+    out_dir.mkdir(parents=True, exist_ok=True)
 
-    for _ in range(days):
-        daily_products = generator.adjust_products(daily_products)
-        daily_products = generator.adjust_prices(daily_products, current_date)
+    for day in range(days):
+        current = today + timedelta(days=day)
+        if day > 0:
+            gen.adjust_products()
+            gen.adjust_prices(current, today)
 
-        daily_data.append({
-            'date': current_date.strftime('%Y-%m-%d'),
-            'products': daily_products.copy()  # 使用 copy 避免引用问题
-        })
+        fn = out_dir / f"daily_prices_{current.strftime('%Y%m%d')}.csv"
+        with fn.open('w', newline='', encoding='utf-8') as f:
+            w = csv.writer(f)
+            w.writerow(["product_id", "category_id", "name", "price", "change_date"])
+            for p in gen.current_products:
+                w.writerow([
+                    p.product_id,
+                    p.category_id,
+                    p.name,
+                    p.price,
+                    current.strftime("%Y-%m-%d")
+                ])
 
-        current_date += timedelta(days=1)
+if __name__ == '__main__':
+    # 示例：从 CSV 加载 product_pool 并生成 1 年数据
+    products: List[Product] = []
+    prod_csv = Path(__file__).parent.parent.parent / 'data' / 'products.csv'
+    with prod_csv.open('r', encoding='utf-8') as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            products.append(Product(
+                product_id=int(row['product_id']),
+                category_id=int(row['category_id']),
+                name=row['name'],
+                weight=float(row['weight']),
+                price=float(row['price']),
+            ))
 
-    # 如果指定了输出文件，则调用类方法导出
-
-    generator.export_to_csv(daily_data)
-
-    return daily_data
+    price_generator(products, days=365)
+    print("Finished! Files are under:",
+          Path(__file__).parent.parent.parent / 'data' / 'daily_price')

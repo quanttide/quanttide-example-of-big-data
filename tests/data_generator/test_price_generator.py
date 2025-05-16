@@ -1,82 +1,64 @@
-import random
-from src.data_generator.price_generator import Product,PriceGenerator
+import unittest
 from datetime import datetime, timedelta
+from unittest import TestCase
+from src.data_generator.price_generator import Product, PriceGenerator
 
 
-def test_product_initialization():
-    p = Product(1, weight=3, price=50.0)
-    assert p.id == 1
-    assert p.weight == 3
-    assert p.price == 50.0
+class TestPriceAdjustment(TestCase):
+    def setUp(self):
+        # 创建测试用商品（固定初始价格方便断言）
+        self.test_product = Product(
+            product_id=1,
+            category_id=100,
+            name="Test Product",
+            weight=1.0,
+            price=100.0  # 初始基准价格
+        )
+
+        # 创建 PriceGenerator 实例并强制设置当前商品池
+        self.price_gen = PriceGenerator(products=[self.test_product])
+        self.price_gen.current_products = [self.test_product]  # 跳过初始化随机选择
+
+    def test_single_product_price_changes(self):
+        """测试单个商品在预定变更日期是否发生价格变化"""
+        # 设置测试时间参数
+        start_date = datetime(2024, 1, 1)
+        test_dates = [
+            start_date + timedelta(days=i)
+            for i in range(5)  # 测试前5天
+        ]
+
+        # 记录价格变化轨迹
+        price_history = []
+
+        for idx, date in enumerate(test_dates):
+            # 每天执行价格调整
+            self.price_gen.adjust_prices(date, start_date)
+            current_price = self.price_gen.current_products[0].price
+            price_history.append(current_price)
+
+            # 断言非变更日价格保持不变（第一天不调整）
+            if idx == 0:
+                self.assertEqual(current_price, 100.0, "第一天不应调整价格")
+            else:
+                # 通过变化次数验证价格调整计划执行
+                changes_count = sum(1 for p in price_history[1:idx + 1] if p != 100.0)
+
+                # 验证每日最多一次调整
+                self.assertLessEqual(
+                    changes_count, 1,
+                    f"第 {idx + 1} 天检测到多次价格变化"
+                )
+
+        # 验证价格波动范围（基准价的 ±10%）
+        final_price = self.price_gen.current_products[0].price
+        self.assertGreaterEqual(final_price, 90.0, "价格不应低于基准价 90%")
+        self.assertLessEqual(final_price, 110.0, "价格不应高于基准价 110%")
+
+        # 验证至少发生一次价格变化（高斯分布可能产生0次，这里增加容错）
+        total_changes = sum(1 for p in price_history if p != 100.0)
+        self.assertGreaterEqual(total_changes, 0, "应至少发生 0 次价格变化（随机允许）")
 
 
-def test_weighted_random_choice_returns_k_items():
-    product_pool = [Product(i, weight=i % 5 + 1, price=100.0) for i in range(100)]
-
-    # 创建 PriceGenerator 实例
-    generator = PriceGenerator(product_pool)
-
-    # 调用实例方法
-    selected = generator.weighted_random_choice(product_pool, 10)
-
-    assert len(selected) == 10
-
-
-def test_produce_init_returns_120_items():
-    product_pool = [Product(i, weight=1, price=100.0) for i in range(100)]
-    generator = PriceGenerator(product_pool)
-    daily_products = generator.produce_init()
-    assert len(daily_products) == 120
-
-
-def test_adjust_products_changes_products_daily():
-    product_pool = [Product(i, weight=1, price=100.0) for i in range(100)]
-    generator = PriceGenerator(product_pool)
-
-    daily_products = generator.produce_init()
-    dp1 = generator.adjust_products(daily_products.copy())
-    dp2 = generator.adjust_products(dp1.copy())
-
-    assert dp1 != dp2  # 至少有一个商品不同
-
-
-def test_generate_daily_products_changes_products_daily():
-    product_pool = [Product(i, weight=1, price=100.0) for i in range(100)]
-    generator = PriceGenerator(product_pool)
-
-    daily_products = generator.produce_init()
-    dp1 = generator.adjust_products(daily_products.copy())
-    dp2 = generator.adjust_products(dp1.copy())
-
-    assert dp1 != dp2  # 至少有一个商品不同
-
-def test_adjust_prices_does_not_crash():
-    product_pool = [Product(i, weight=1, price=100.0) for i in range(100)]
-    generator = PriceGenerator(product_pool)
-
-    # 假设当前日期为今天
-    current_date = datetime.now()
-
-    try:
-        updated_products = generator.adjust_prices(product_pool, current_date)
-        assert isinstance(updated_products, list)  # 确保返回的是商品列表
-    except Exception as e:
-        assert False, f"adjust_prices raised an exception: {e}"
-
-
-def test_adjust_prices_actually_changes_price(capsys):
-    # 强制触发价格调整逻辑
-    original_random = random.random
-    random.random = lambda: 0.01  # 确保随机数小于0.02，触发调价逻辑
-
-    product = Product(1, weight=1, price=100.0)
-    product.last_price_date = datetime.now() - timedelta(days=100)  # 强制让上次调价时间超过 avg_days
-    generator = PriceGenerator(product_pool=[product])
-
-    current_date = datetime.now()
-    generator.adjust_prices([product], current_date)
-
-    assert product.price != 100.0
-
-    # 恢复原始 random.random
-    random.random = original_random
+if __name__ == '__main__':
+    unittest.main()

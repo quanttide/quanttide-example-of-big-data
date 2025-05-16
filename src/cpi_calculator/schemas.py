@@ -26,7 +26,6 @@ class Price(Base):
     date = Column(Date, primary_key=True, nullable=False, comment='价格日期')
     product_id = Column(Integer, primary_key=True, nullable=False, comment='商品ID')
     category_id = Column(Integer, ForeignKey('category.id', ondelete='CASCADE'), nullable=False, comment='分类ID')
-    name = Column(String(50), comment='商品名称')
     price = Column(Decimal(12,2), comment='商品价格（元）')
 
     # 关系定义
